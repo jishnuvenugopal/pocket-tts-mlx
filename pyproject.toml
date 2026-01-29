@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pocket-tts-mlx"
+version = "0.1.0"
+description = "MLX backend for pocket-tts with Apple Silicon optimization"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "jishnuvenugopal"}
+]
+keywords = ["tts", "text-to-speech", "mlx", "apple-silicon", "voice-cloning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+dependencies = [
+    "mlx>=0.20.0",
+    "pocket-tts>=0.1.0",
+    "numpy",
+    "safetensors",
+    "einops",
+    "tokenizers",
+    "encodec",
+    "typing-extensions",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jishnuvenugopal/pocket-tts-mlx"
+Repository = "https://github.com/jishnuvenugopal/pocket-tts-mlx"
+Issues = "https://github.com/jishnuvenugopal/pocket-tts-mlx/issues"
+
+[project.scripts]
+pocket-tts-mlx = "pocket_tts_mlx.main:main"
+
+[tool.setuptools.packages.find]
+include = ["pocket_tts_mlx*"]
+
+[tool.setuptools.package-data]
+pocket_tts_mlx = ["*.yaml", "*.yml"]
