@@ -55,9 +55,14 @@ class RMSNorm(nn.Module):
 
         Returns:
             Normalized tensor of same shape.
+
+        Note:
+            PyTorch pocket-tts uses variance (not mean of squares) in RMSNorm.
+            We match that behavior for weight compatibility.
         """
-        var = mx.mean(mx.square(x), axis=-1, keepdims=True)
-        y = x * (self.alpha / mx.sqrt(var + self.eps))
+        # Match PyTorch: var = eps + x.var(dim=-1, keepdim=True)
+        var = self.eps + mx.var(x, axis=-1, keepdims=True)
+        y = x * (self.alpha / mx.sqrt(var))
         return y
 
 
