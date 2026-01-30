@@ -40,7 +40,7 @@ class KVCacheResult(NamedTuple):
         B, H, T, D = keys.shape
         assert values.shape[:-1] == (B, H, T), f"Shape mismatch: keys={keys.shape}, values={values.shape}"
         positions = mx.arange(T, dtype=mx.int64)
-        positions = mx.broadcast_to(positions, (B, -1))
+        positions = mx.broadcast_to(positions[None, :], (B, T))
         return KVCacheResult(keys, values, positions)
 
 
@@ -347,16 +347,20 @@ def complete_mimi_kv(
     end_offset: mx.array,
     k: mx.array,
     v: mx.array,
+    layer_state: Dict[str, mx.array],
 ) -> "KVCacheResult":
     """Complete KV cache for Mimi-style streaming attention with circular buffer.
 
     This uses a circular buffer scheme where positions wrap around modulo capacity.
+    Unlike PyTorch which uses in-place operations, this function explicitly updates
+    the layer_state dictionary with the new cache and end_offset values.
 
     Args:
         cache: Cache tensor of shape [2, B, H, T_max, D] where index 0 is keys, 1 is values.
         end_offset: Current write offset tensor of shape [B].
         k: New keys of shape [B, H, T_new, D].
         v: New values of shape [B, H, T_new, D].
+        layer_state: State dictionary to update with new cache and end_offset.
 
     Returns:
         KVCacheResult with keys, values, and position indices.
@@ -368,41 +372,26 @@ def complete_mimi_kv(
     assert v.shape[:-1] == (B, H, T), f"Shape mismatch: k={k.shape}, v={v.shape}"
 
     # Create write indices with circular wrapping
+    # indexes: [T] + [B, 1] -> [B, T]
     indexes = mx.arange(T, dtype=mx.int64)
     indexes = indexes + mx.expand_dims(end_offset, axis=-1)
-    indexes = indexes % capacity  # Circular wrap
+    indexes = indexes % capacity  # Circular wrap: [B, T]
 
-    # Expand indexes for all batches, heads, and dimensions
-    # indexes: [B, T] -> [B, 1, T, 1] -> [B, H, T, D]
-    indexes = mx.reshape(indexes, (B, 1, T, 1))
-    indexes = mx.broadcast_to(indexes, (B, H, T, D))
+    # Get current cache keys and values
+    cache_keys = cache[0]    # [B, H, T_max, D]
+    cache_values = cache[1]  # [B, H, T_max, D]
 
-    # Scatter add keys and values to cache
-    # Note: MLX doesn't have scatter_, so we use a different approach
-    # We'll need to iterate or use a more complex operation
+    # Use put_along_axis to scatter k and v into the cache
+    # put_along_axis(a, indices, values, axis) puts values into a at indices along axis
+    # We need to scatter along axis=2 (the time dimension)
+    #
+    # Reshape indexes for broadcasting: [B, T] -> [B, 1, T, 1] to match [B, H, T, D]
+    indexes_expanded = mx.reshape(indexes, (B, 1, T, 1))
+    indexes_expanded = mx.broadcast_to(indexes_expanded, (B, H, T, D))
 
-    # For now, let's use a simpler approach that works with MLX
-    # We'll gather the existing cache and update it
-
-    cache_keys = cache[0]
-    cache_values = cache[1]
-
-    # Since MLX doesn't have a direct scatter operation, we need to
-    # implement this differently. We'll use slice_update for each update.
-
-    # Update keys and values using mx.slice_update
-    for b in range(B):
-        for t in range(T):
-            idx = int(indexes[b, 0, t, 0])
-            # Prepare update values: k[b, :, t, :] has shape (H, D)
-            # We need to add batch and time dimensions
-            k_update = mx.reshape(k[b, :, t, :], (1, H, 1, D))
-            v_update = mx.reshape(v[b, :, t, :], (1, H, 1, D))
-            # Start position for the update
-            start = mx.array([b, 0, idx, 0])
-            # Update cache_keys and cache_values
-            cache_keys = mx.slice_update(cache_keys, k_update, start, axes=[0, 1, 2, 3])
-            cache_values = mx.slice_update(cache_values, v_update, start, axes=[0, 1, 2, 3])
+    # Scatter keys: put k values at indexes positions along axis 2
+    cache_keys = mx.put_along_axis(cache_keys, indexes_expanded, k, axis=2)
+    cache_values = mx.put_along_axis(cache_values, indexes_expanded, v, axis=2)
 
     keys = cache_keys
     values = cache_values
@@ -428,13 +417,17 @@ def complete_mimi_kv(
         last_offset_expanded + delta - capacity
     )  # (B, capacity)
 
-    # Update end offset
+    # Update end offset (PyTorch does: end_offset[:] = end_offset + T)
     new_end_offset = end_offset + T
 
     # Mark invalid positions
     new_end_offset_expanded = mx.reshape(new_end_offset, (B, 1))  # (B, 1)
     invalid = full_indexes_expanded >= new_end_offset_expanded  # (B, capacity)
     positions = mx.where(invalid, mx.full(positions.shape, -1, dtype=positions.dtype), positions)
+
+    # Update state with new cache and end_offset (MLX doesn't support in-place ops)
+    layer_state["cache"] = mx.stack([keys, values], axis=0)
+    layer_state["end_offset"] = new_end_offset
 
     return KVCacheResult(keys, values, positions)
 
@@ -514,7 +507,7 @@ class MimiStreamingMultiheadAttention(StatefulModule):
             return KVCacheResult.from_kv(k, v)
         else:
             layer_state = self._check_model_state(model_state)
-            return complete_mimi_kv(layer_state["cache"], layer_state["end_offset"], k, v)
+            return complete_mimi_kv(layer_state["cache"], layer_state["end_offset"], k, v, layer_state)
 
     def _check_model_state(self, model_state: Any) -> Dict[str, mx.array]:
         """Validate and extract module state.

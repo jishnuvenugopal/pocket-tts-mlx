@@ -40,6 +40,7 @@ from pocket_tts_mlx.modules.dummy_quantizer import DummyQuantizer
 from pocket_tts_mlx.modules.mimi_transformer import ProjectedTransformer
 from pocket_tts_mlx.modules.mlp import SimpleMLPAdaLN
 from pocket_tts_mlx.modules.seanet import SEANetDecoder, SEANetEncoder
+from pocket_tts_mlx.modules.conv import DepthwiseConvTranspose1d, _DepthwiseConvWeightHolder
 from pocket_tts_mlx.modules.stateful_module import StatefulModule, increment_steps, init_states
 from pocket_tts_mlx.utils.config import Config, load_config
 from pocket_tts_mlx.utils.weight_conversion import (
@@ -56,7 +57,7 @@ from pocket_tts_mlx.utils.utils import (
 )
 
 logger = logging.getLogger(__name__)
-
+print("START")
 
 def split_into_best_sentences(tokenizer, text_to_generate: str, max_tokens: int) -> list[str]:
     """Split text into sentence chunks that fit within token limit.
@@ -69,6 +70,8 @@ def split_into_best_sentences(tokenizer, text_to_generate: str, max_tokens: int)
     Returns:
         List of text chunks.
     """
+
+    print("SPLIT")
     text_to_generate, _ = prepare_text_prompt(text_to_generate)
     text_to_generate = text_to_generate.strip()
     tokens = tokenizer(text_to_generate)
@@ -325,7 +328,11 @@ class TTSModel(nn.Module):
                         for part in parts[:-1]:
                             if part.isdigit():
                                 # Try to index into list/Sequential
-                                obj = obj[int(part)]
+                                # MLX Sequential uses .layers for indexing
+                                if isinstance(obj, nn.Sequential):
+                                    obj = obj.layers[int(part)]
+                                else:
+                                    obj = obj[int(part)]
                             else:
                                 obj = getattr(obj, part)
                         # Set the final parameter value
@@ -349,7 +356,17 @@ class TTSModel(nn.Module):
                             isinstance(obj, nn.Conv1d) and
                             len(mlx_array.shape) == 3
                         )
-                        if is_conv_transpose_weight:
+                        # DepthwiseConvTranspose1d uses a nested weight holder class
+                        is_depthwise_conv_transpose_weight = (
+                            param_name == 'weight' and
+                            isinstance(obj, (_DepthwiseConvWeightHolder, DepthwiseConvTranspose1d)) and
+                            len(mlx_array.shape) == 3
+                        )
+                        if is_depthwise_conv_transpose_weight:
+                            # PyTorch depthwise ConvTranspose1d: (in_channels, 1, kernel_size)
+                            # MLX DepthwiseConvTranspose1d: (channels, kernel_size, 1)
+                            mlx_array = mx.transpose(mlx_array, (0, 2, 1))
+                        elif is_conv_transpose_weight:
                             # Check if this is a depthwise ConvTranspose1d
                             # PyTorch depthwise format: (in_channels, 1, kernel_size)
                             # Regular format: (in_channels, out_channels, kernel_size)
@@ -504,7 +521,7 @@ class TTSModel(nn.Module):
             Encoded latent representation.
         """
         encoded = self.mimi.encode_to_latent(audio)
-        latents = mx.transpose(encoded, (-1, -2)).astype(mx.float32)
+        latents = mx.transpose(encoded, (0, 2, 1)).astype(mx.float32)  # Swap last two dims
         conditioning = mx.matmul(latents, self.flow_lm.speaker_proj_weight.T)
         return conditioning
 
@@ -894,8 +911,18 @@ class TTSModel(nn.Module):
                     audio, conditioning_sample_rate, self.config.mimi.sample_rate, 1
                 )
 
+            # Pad audio to be multiple of 4 (required by streaming conv stride)
+            audio_arr = mx.array(audio_conditioning)
+            if audio_arr.ndim == 1:
+                audio_arr = audio_arr[None, :]  # Add channel dim
+            T = audio_arr.shape[-1]
+            pad_amount = (4 - T % 4) % 4
+            if pad_amount > 0:
+                audio_arr = mx.pad(audio_arr, [(0, 0)] * (audio_arr.ndim - 1) + [(0, pad_amount)])
+                logger.debug(f"Padded audio from {T} to {audio_arr.shape[-1]} samples")
+
             with display_execution_time("Encoding audio prompt"):
-                prompt = self._encode_audio(mx.array(audio_conditioning)[None, ...])
+                prompt = self._encode_audio(audio_arr[None, ...] if audio_arr.ndim == 2 else audio_arr)
 
         model_state = init_states(self.flow_lm, batch_size=1, sequence_length=1000)
 

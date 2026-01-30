@@ -9,6 +9,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from pocket_tts_mlx.modules.conv import StreamingConv1d, StreamingConvTranspose1d, DepthwiseConvTranspose1d
+from pocket_tts_mlx.modules.stateful_module import StatefulModule
 
 
 class ConvDownsample1d(nn.Module):
@@ -66,31 +67,23 @@ class ConvTrUpsample1d(nn.Module):
             bias=False,
         )
 
-        self._stride = stride
-        self._kernel_size = 2 * stride
+        self._stride_value = stride
+        self._kernel_size_value = 2 * stride
 
     @property
     def _stride(self) -> int:
-        return self.__dict__.get('_stride_value', self.convtr.stride)
-
-    @_stride.setter
-    def _stride(self, value: int):
-        self.__dict__['_stride_value'] = value
+        return self._stride_value
 
     @property
     def _kernel_size(self) -> int:
-        return self.__dict__.get('_kernel_size_value', self.convtr.kernel_size)
-
-    @_kernel_size.setter
-    def _kernel_size(self, value: int):
-        self.__dict__['_kernel_size_value'] = value
+        return self._kernel_size_value
 
     def __call__(self, x, model_state: Any) -> object:
         """Forward pass.
 
         Args:
             x: Input tensor of shape [B, C, T] (channels-first).
-            model_state: Model state for streaming (not used for depthwise).
+            model_state: Model state for streaming.
 
         Returns:
             Upsampled tensor of shape [B, C, T'].
@@ -99,8 +92,8 @@ class ConvTrUpsample1d(nn.Module):
         # Convert from channels-first (B, C, T) to channels-last (B, T, C)
         x = mx.transpose(x, (0, 2, 1))  # (B, C, T) -> (B, T, C)
 
-        # Apply depthwise transposed convolution
-        y = self.convtr(x)  # (B, T', C)
+        # Apply depthwise transposed convolution with streaming state
+        y = self.convtr(x, model_state)  # (B, T', C)
 
         # Convert back to channels-first format
         y = mx.transpose(y, (0, 2, 1))  # (B, T', C) -> (B, C, T')

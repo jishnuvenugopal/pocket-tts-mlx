@@ -117,7 +117,7 @@ class StreamingConv1d(StatefulModule):
             out_channels=out_channels,
             kernel_size=kernel_size,
             stride=stride,
-            padding=dilation * (kernel_size - 1) // 2,  # Default symmetric padding
+            padding=0,  # Match PyTorch default - streaming handles padding via 'previous' state
             dilation=dilation,
             groups=groups,
             bias=bias,
@@ -197,13 +197,21 @@ class StreamingConv1d(StatefulModule):
         B, C, T = x.shape
         S = self._stride
 
-        assert T > 0 and T % S == 0, f"Steps must be multiple of stride, got T={T}, stride={S}"
-
         # Initialize state if not provided
         if model_state is None:
             state = self.init_state(B, 0)
+            # For non-streaming mode, pad input to be compatible with stride
+            # after prepending previous samples
+            TP = state["previous"].shape[-1]
+            T_total = T + TP
+            pad_needed = (S - T_total % S) % S
+            if pad_needed > 0:
+                x = mx.pad(x, [(0, 0), (0, 0), (0, pad_needed)])
+                T = x.shape[-1]
         else:
             state = self._check_model_state(model_state)
+            # For streaming mode, require strict alignment
+            assert T > 0 and T % S == 0, f"Steps must be multiple of stride, got T={T}, stride={S}"
 
         TP = state["previous"].shape[-1]
 
@@ -271,12 +279,13 @@ class StreamingConvTranspose1d(StatefulModule):
         super().__init__()
 
         # MLX ConvTranspose1d (doesn't have groups parameter)
+        # Note: PyTorch defaults to padding=0, MLX must match this for compatibility
         self.convtr = nn.ConvTranspose1d(
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
             stride=stride,
-            padding=kernel_size - stride,  # Default padding
+            padding=0,  # Match PyTorch default (padding=0)
             bias=bias,
         )
 
@@ -381,11 +390,30 @@ class StreamingConvTranspose1d(StatefulModule):
         return y
 
 
-class DepthwiseConvTranspose1d(nn.Module):
-    """Depthwise ConvTranspose1d for MLX.
+class _DepthwiseConvWeightHolder(nn.Module):
+    """Inner module to hold weights for DepthwiseConvTranspose1d.
+
+    This creates a nested structure to match PyTorch's weight path:
+    PyTorch: mimi.upsample.convtr.convtr.weight
+    MLX: mimi.upsample.convtr.convtr.weight (via this holder)
+    """
+    def __init__(self, out_channels: int, kernel_size: int, bias: bool):
+        super().__init__()
+        # Weight shape: [C, K, 1] where C is channels, K is kernel_size
+        # PyTorch shape is [C, 1, K], will be transposed during loading
+        self.weight = mx.zeros((out_channels, kernel_size, 1))
+        if bias:
+            self.bias = mx.zeros(out_channels)
+        else:
+            self.bias = None
+
+
+class DepthwiseConvTranspose1d(StatefulModule):
+    """Depthwise ConvTranspose1d for MLX with streaming support.
 
     MLX doesn't support groups parameter in ConvTranspose1d. This class
-    implements depthwise convolution by processing each channel independently.
+    implements depthwise convolution with proper streaming support using
+    the partial overlap-add mechanism like StreamingConvTranspose1d.
 
     Args:
         in_channels: Number of input channels (must equal out_channels for depthwise).
@@ -414,14 +442,12 @@ class DepthwiseConvTranspose1d(nn.Module):
         self._out_channels = out_channels
         self._kernel_size = kernel_size
         self._stride = stride
+        self._has_bias = bias
 
-        # For depthwise convolution, each channel uses its own kernel
-        # Weight shape: [C, K, 1] where C is channels, K is kernel_size
-        self.weight = mx.zeros((out_channels, kernel_size, 1))
-        if bias:
-            self.bias = mx.zeros(out_channels)
-        else:
-            self.bias = None
+        # Use nested convtr to match PyTorch's weight path structure
+        # PyTorch: StreamingConvTranspose1d.convtr.weight
+        # MLX: DepthwiseConvTranspose1d.convtr.weight
+        self.convtr = _DepthwiseConvWeightHolder(out_channels, kernel_size, bias)
 
     @property
     def stride(self) -> int:
@@ -439,38 +465,124 @@ class DepthwiseConvTranspose1d(nn.Module):
     def out_channels(self) -> int:
         return self._out_channels
 
-    def __call__(self, x: mx.array) -> mx.array:
-        """Forward pass for depthwise transposed convolution.
+    @property
+    def weight(self) -> mx.array:
+        return self.convtr.weight
+
+    @property
+    def bias(self):
+        return self.convtr.bias
+
+    def init_state(self, batch_size: int, sequence_length: int) -> Dict[str, mx.array]:
+        """Initialize state for streaming inference.
+
+        Args:
+            batch_size: Batch size.
+            sequence_length: Maximum sequence length.
+
+        Returns:
+            State dictionary with 'partial' entry for overlap.
+        """
+        K = self._kernel_size
+        S = self._stride
+        # Partial output to carry over to next step (channels-last format)
+        partial = mx.zeros((batch_size, K - S, self._out_channels))
+        return {"partial": partial}
+
+    def _raw_conv_transpose(self, x: mx.array) -> mx.array:
+        """Raw transposed convolution without streaming logic.
 
         Args:
             x: Input tensor of shape [B, L, C] (channels-last format).
 
         Returns:
-            Output tensor of shape [B, L', C] (channels-last format).
+            Output tensor of shape [B, (L-1)*S + K, C] (channels-last format).
         """
         B, L, C = x.shape
         K = self._kernel_size
         S = self._stride
 
-        # Calculate expected output length for ConvTranspose1d
-        # out_L = (L - 1) * S + K
-        expected_out_L = (L - 1) * S + K
+        # Output length for transposed convolution: (L - 1) * S + K
+        out_L = (L - 1) * S + K
 
-        # Use nearest neighbor upsampling by stride S
-        # This is simpler and more predictable than conv_transpose1d
-        # Upsample by repeating each element S times
-        x_expanded = mx.expand_dims(x, axis=2)  # [B, L, 1, C]
-        x_tiled = mx.repeat(x_expanded, repeats=S, axis=2)  # [B, L, S, C]
-        y = mx.reshape(x_tiled, (B, L * S, C))  # [B, L*S, C]
+        # Weight shape is [C, K, 1] - squeeze the last dimension
+        weight = self.weight[:, :, 0]  # [C, K]
 
-        # Pad or trim to expected output length
-        current_L = y.shape[1]
-        if current_L < expected_out_L:
-            # Pad at the end
-            pad_length = expected_out_L - current_L
-            y = mx.pad(y, [(0, 0), (0, pad_length), (0, 0)])
-        elif current_L > expected_out_L:
-            # Trim from the end
-            y = y[:, :expected_out_L, :]
+        # Build output by accumulating contributions from each input position
+        contributions = []
+
+        for i in range(L):
+            start = i * S
+            x_i = x[:, i, :]  # [B, C]
+            w_t = mx.transpose(weight, (1, 0))  # [K, C]
+            contrib = x_i[:, None, :] * w_t[None, :, :]  # [B, K, C]
+
+            pad_right = out_L - start - K
+            if pad_right < 0:
+                contrib = contrib[:, :out_L - start, :]
+                pad_right = 0
+
+            padded = mx.pad(contrib, [(0, 0), (start, pad_right), (0, 0)])
+            contributions.append(padded)
+
+        y = mx.stack(contributions, axis=0).sum(axis=0)  # [B, out_L, C]
+
+        # Add bias if present
+        if self.bias is not None:
+            y = y + self.bias[None, None, :]
+
+        return y
+
+    def _check_model_state(self, model_state: Any) -> Dict[str, mx.array]:
+        """Validate and extract module state."""
+        if model_state is None:
+            raise ValueError("model_state must be provided when not None")
+        if "partial" in model_state:
+            return model_state
+        else:
+            return self.get_state(model_state)
+
+    def __call__(self, x: mx.array, model_state: Any = None) -> mx.array:
+        """Forward pass for depthwise transposed convolution with streaming.
+
+        Args:
+            x: Input tensor of shape [B, L, C] (channels-last format).
+            model_state: Model state dictionary for streaming.
+
+        Returns:
+            Output tensor of shape [B, L*S, C] (channels-last format).
+        """
+        B, L, C = x.shape
+        K = self._kernel_size
+        S = self._stride
+        PT = K - S  # Partial size
+
+        # Get state
+        if model_state is None:
+            state = self.init_state(B, 0)
+        else:
+            state = self._check_model_state(model_state)
+
+        layer_state = state["partial"]
+
+        # Raw transposed convolution
+        y = self._raw_conv_transpose(x)  # [B, (L-1)*S + K, C]
+
+        if PT > 0:
+            # Add partial from previous step to beginning
+            y_start = y[:, :PT, :] + layer_state
+            y = mx.concatenate([y_start, y[:, PT:, :]], axis=1)
+
+            # Compute new partial for next step (last PT samples)
+            # Remove bias contribution from partial
+            for_partial = y[:, -PT:, :]
+            if self.bias is not None:
+                for_partial = for_partial - self.bias[None, None, :]
+
+            # Update state
+            state["partial"] = for_partial
+
+            # Remove partial portion from output (trim last PT samples)
+            y = y[:, :-PT, :]
 
         return y
