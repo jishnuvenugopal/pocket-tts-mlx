@@ -74,7 +74,7 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Saving to: {output_path}")
-        sf.write(str(output_path), audio.numpy(), model.config.mimi.sample_rate)
+        sf.write(str(output_path), np.array(audio), model.config.mimi.sample_rate)
 
         duration = audio.shape[-1] / model.config.mimi.sample_rate
         logger.info(f"Generated {duration:.2f}s of audio")
