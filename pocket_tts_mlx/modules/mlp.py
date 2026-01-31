@@ -56,7 +56,7 @@ class RMSNorm(nn.Module):
         Returns:
             Normalized tensor of same shape.
         """
-        var = mx.var(x, axis=-1, keepdims=True)
+        var = mx.mean(mx.square(x), axis=-1, keepdims=True)
         y = x * (self.alpha / mx.sqrt(var + self.eps))
         return y
 
