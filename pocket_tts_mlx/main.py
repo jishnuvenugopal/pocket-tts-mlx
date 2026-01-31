@@ -56,15 +56,15 @@ def main():
         logger.info("Loading MLX model...")
         model = TTSModel.load_model()
 
-        # Get voice state
+        # Get model state with voice
         logger.info(f"Loading voice: {args.voice}")
-        voice_state = model.get_state_for_audio_prompt(args.voice)
+        model_state = model.get_state_for_audio_prompt(args.voice)
 
         # Generate audio
         logger.info(f"Generating audio for: \"{args.text}\"")
         audio = model.generate_audio(
-            voice_state=voice_state,
-            text=args.text,
+            model_state=model_state,
+            text_to_generate=args.text,
             max_tokens=args.max_tokens,
             frames_after_eos=args.frames_after_eos,
         )
