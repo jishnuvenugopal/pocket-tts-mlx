@@ -404,7 +404,7 @@ class TTSModel(nn.Module):
         Returns:
             TTSModel instance.
         """
-        config = load_config(Path(__file__).parents[2] / f"config/{variant}.yaml")
+        config = load_config(Path(__file__).parents[1] / "config" / f"{variant}.yaml")
         tts_model = cls._from_pydantic_config_with_weights(
             config, temp, lsd_decode_steps, noise_clamp, eos_threshold
         )
