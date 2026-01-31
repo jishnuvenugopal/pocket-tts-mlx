@@ -54,4 +54,4 @@ pocket-tts-mlx = "pocket_tts_mlx.main:main"
 include = ["pocket_tts_mlx*"]
 
 [tool.setuptools.package-data]
-pocket_tts_mlx = ["*.yaml", "*.yml"]
+pocket_tts_mlx = ["config/*.yaml", "config/*.yml", "*.yaml", "*.yml"]
