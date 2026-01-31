@@ -64,8 +64,8 @@ def complete_kv(
         complete_keys: Complete keys with shape [B, T, H, D].
         complete_values: Complete values with shape [B, T, H, D].
     """
-    # Get the current write position
-    current_pos = current_end.shape[0]
+    # Get the current write position from the actual current_end value
+    current_pos = int(current_end.item()) if current_end.size > 0 else 0
     t_new = k.shape[1]  # T dimension (channels-last format: [B, L, C])
 
     # cache has shape [2, B, T_max, H, D]
@@ -187,7 +187,8 @@ class StreamingMultiheadAttention(StatefulModule):
             State dictionary with 'current_end' and 'cache' entries.
         """
         dim_per_head = self.embed_dim // self.num_heads
-        initial_current_end = mx.zeros((0,), dtype=mx.int64)
+        # Use scalar 0 instead of empty array for current_end
+        initial_current_end = mx.array(0, dtype=mx.int64)
 
         # Initialize cache with zeros (not NaN - NaN propagates through attention)
         cache = mx.zeros(
@@ -203,8 +204,9 @@ class StreamingMultiheadAttention(StatefulModule):
             state: Module state dictionary.
             increment: Number of steps to increment.
         """
-        new_size = state["current_end"].shape[0] + increment
-        state["current_end"] = mx.zeros((new_size,), dtype=mx.int64)
+        # Properly increment the current_end position
+        current_val = int(state["current_end"].item()) if state["current_end"].size > 0 else 0
+        state["current_end"] = mx.array(current_val + increment, dtype=mx.int64)
 
     def _complete_kv(
         self, k: mx.array, v: mx.array, state: Optional[Dict[str, mx.array]]
@@ -219,9 +221,13 @@ class StreamingMultiheadAttention(StatefulModule):
         Returns:
             Tuple of (complete_keys, complete_values) with cached values prepended.
         """
+        t_new = k.shape[1]
         updated_cache, k, v = complete_kv(state["cache"], state["current_end"], k, v)
         # Update the state with the new cache
         state["cache"] = updated_cache
+        # Update current_end to reflect the new tokens added
+        current_val = int(state["current_end"].item()) if state["current_end"].size > 0 else 0
+        state["current_end"] = mx.array(current_val + t_new, dtype=mx.int64)
         return k, v
 
     def _apply_rope(
@@ -249,7 +255,7 @@ class StreamingMultiheadAttention(StatefulModule):
         Returns:
             Current position in the sequence.
         """
-        return state["current_end"].shape[0]
+        return int(state["current_end"].item()) if state["current_end"].size > 0 else 0
 
     def check_model_state(self, model_state: Any) -> Dict[str, mx.array]:
         """Validate and extract module state.
@@ -303,11 +309,13 @@ class StreamingMultiheadAttention(StatefulModule):
         # Apply rotary embeddings
         q, k = self._apply_rope(q, k, state)
 
+        # Save cache length before completing KV (for mask calculation)
+        cache_len = int(state["current_end"].item()) if state["current_end"].size > 0 else 0
+
         # Complete KV cache
         k, v = self._complete_kv(k, v, state)
 
-        # Create causal mask
-        cache_len = state["current_end"].shape[0]
+        # Create causal mask using the cache_len from before this pass
         mask_shape = (T, T + cache_len)
         shift = cache_len
         attn_mask = self._get_mask(mask_shape, shift=shift)
@@ -387,22 +395,14 @@ def complete_mimi_kv(
     cache_keys = cache[0]
     cache_values = cache[1]
 
-    # Since MLX doesn't have a direct scatter operation, we need to
-    # implement this differently. We'll use slice_update for each update.
+    # Vectorized update using put_along_axis for efficiency
+    # Reshape indexes for broadcasting: [B, H, T, D]
+    indexes_expanded = indexes  # Already [B, H, T, D] shape from earlier
 
-    # Update keys and values using mx.slice_update
-    for b in range(B):
-        for t in range(T):
-            idx = int(indexes[b, 0, t, 0])
-            # Prepare update values: k[b, :, t, :] has shape (H, D)
-            # We need to add batch and time dimensions
-            k_update = mx.reshape(k[b, :, t, :], (1, H, 1, D))
-            v_update = mx.reshape(v[b, :, t, :], (1, H, 1, D))
-            # Start position for the update
-            start = mx.array([b, 0, idx, 0])
-            # Update cache_keys and cache_values
-            cache_keys = mx.slice_update(cache_keys, k_update, start, axes=[0, 1, 2, 3])
-            cache_values = mx.slice_update(cache_values, v_update, start, axes=[0, 1, 2, 3])
+    # Use put_along_axis to scatter k and v into cache
+    # This is much faster than the Python loop
+    cache_keys = mx.put_along_axis(cache_keys, indexes_expanded, k, axis=2)
+    cache_values = mx.put_along_axis(cache_values, indexes_expanded, v, axis=2)
 
     keys = cache_keys
     values = cache_values
@@ -495,7 +495,9 @@ class MimiStreamingMultiheadAttention(StatefulModule):
             state: Module state dictionary.
             increment: Number of steps to increment.
         """
+        # Also update end_offset to match
         state["offset"] = state["offset"] + increment
+        state["end_offset"] = state["end_offset"] + increment
 
     def _complete_kv(
         self, k: mx.array, v: mx.array, model_state: Any

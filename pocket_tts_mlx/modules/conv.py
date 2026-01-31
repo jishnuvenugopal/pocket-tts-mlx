@@ -381,8 +381,8 @@ class StreamingConvTranspose1d(StatefulModule):
         return y
 
 
-class DepthwiseConvTranspose1d(nn.Module):
-    """Depthwise ConvTranspose1d for MLX.
+class DepthwiseConvTranspose1d(StatefulModule):
+    """Depthwise ConvTranspose1d for MLX with streaming support.
 
     MLX doesn't support groups parameter in ConvTranspose1d. This class
     implements depthwise convolution by processing each channel independently.
@@ -439,11 +439,28 @@ class DepthwiseConvTranspose1d(nn.Module):
     def out_channels(self) -> int:
         return self._out_channels
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def init_state(self, batch_size: int, sequence_length: int) -> dict:
+        """Initialize state for streaming inference.
+
+        Args:
+            batch_size: Batch size.
+            sequence_length: Maximum sequence length (not used for this module).
+
+        Returns:
+            State dictionary with 'partial' buffer for overlap-add.
+        """
+        # For transposed convolution, we need to store partial output for overlap
+        # The kernel size - 1 determines the overlap
+        PT = self._kernel_size - 1  # Partial tail length
+        partial = mx.zeros((batch_size, PT, self._out_channels))
+        return {"partial": partial}
+
+    def __call__(self, x: mx.array, model_state: dict = None) -> mx.array:
         """Forward pass for depthwise transposed convolution.
 
         Args:
             x: Input tensor of shape [B, L, C] (channels-last format).
+            model_state: Model state for streaming (optional).
 
         Returns:
             Output tensor of shape [B, L', C] (channels-last format).
@@ -472,5 +489,28 @@ class DepthwiseConvTranspose1d(nn.Module):
         elif current_L > expected_out_L:
             # Trim from the end
             y = y[:, :expected_out_L, :]
+
+        # Handle streaming state for overlap-add
+        if model_state is not None:
+            # Check if model_state is a direct state dict or nested
+            if "partial" in model_state:
+                # Direct state dict
+                state = model_state
+            else:
+                # Nested model state dict - use get_state
+                state = self.get_state(model_state)
+            partial = state.get("partial", None)
+
+            if partial is not None:
+                # Prepend partial from previous chunk
+                PT = partial.shape[1]  # Partial tail length
+                y = mx.concatenate([partial, y], axis=1)
+
+                # Store new partial (last PT elements)
+                new_partial = y[:, -PT:, :]
+                state["partial"] = new_partial
+
+                # Remove partial portion from output
+                y = y[:, :-PT, :]
 
         return y

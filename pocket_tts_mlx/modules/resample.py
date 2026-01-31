@@ -31,7 +31,7 @@ class ConvDownsample1d(nn.Module):
             pad_mode="replicate",
         )
 
-    def __call__(self, x, model_state: Any) -> object:
+    def __call__(self, x, model_state: Any) -> mx.array:
         """Forward pass.
 
         Args:
@@ -85,12 +85,12 @@ class ConvTrUpsample1d(nn.Module):
     def _kernel_size(self, value: int):
         self.__dict__['_kernel_size_value'] = value
 
-    def __call__(self, x, model_state: Any) -> object:
+    def __call__(self, x, model_state: Any = None) -> mx.array:
         """Forward pass.
 
         Args:
             x: Input tensor of shape [B, C, T] (channels-first).
-            model_state: Model state for streaming (not used for depthwise).
+            model_state: Model state for streaming.
 
         Returns:
             Upsampled tensor of shape [B, C, T'].
@@ -99,8 +99,8 @@ class ConvTrUpsample1d(nn.Module):
         # Convert from channels-first (B, C, T) to channels-last (B, T, C)
         x = mx.transpose(x, (0, 2, 1))  # (B, C, T) -> (B, T, C)
 
-        # Apply depthwise transposed convolution
-        y = self.convtr(x)  # (B, T', C)
+        # Apply depthwise transposed convolution with streaming state
+        y = self.convtr(x, model_state)  # (B, T', C)
 
         # Convert back to channels-first format
         y = mx.transpose(y, (0, 2, 1))  # (B, T', C) -> (B, C, T')
