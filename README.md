@@ -6,6 +6,8 @@ Runtime is torch-free. Torch is only required for optional parity tests.
 
 **Installation**
 
+PyPI install (available after release):
+
 ```bash
 pip install pocket-tts-mlx
 ```
