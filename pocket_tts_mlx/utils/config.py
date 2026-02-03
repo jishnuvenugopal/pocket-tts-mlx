@@ -1,30 +1,26 @@
-"""Configuration models for loading YAML config files.
-
-Adapted from pocket-tts for MLX compatibility.
-"""
+"""Configuration models for loading YAML config files."""
 
 from pathlib import Path
-from typing import Union
 
 import yaml
 from pydantic import BaseModel, ConfigDict
 
 
 class StrictModel(BaseModel):
-    """Base model with strict validation (no extra fields allowed)."""
+    """Base model that forbids unknown fields."""
     model_config = ConfigDict(extra="forbid")
 
 
 # Flow configuration
 class FlowConfig(StrictModel):
-    """Configuration for flow matching model."""
+    """Flow MLP depth and width settings."""
     dim: int
     depth: int
 
 
 # Transformer configuration for FlowLM
 class FlowLMTransformerConfig(StrictModel):
-    """Configuration for FlowLM transformer."""
+    """Streaming transformer settings for FlowLM."""
     hidden_scale: int
     max_period: int
     d_model: int
@@ -33,16 +29,16 @@ class FlowLMTransformerConfig(StrictModel):
 
 
 class LookupTable(StrictModel):
-    """Configuration for lookup table conditioner."""
+    """Tokenizer and lookup table parameters."""
     dim: int
     n_bins: int
     tokenizer: str
     tokenizer_path: str
 
 
-# Root configuration for FlowLM
+# Root configuration
 class FlowLMConfig(StrictModel):
-    """Root configuration model for FlowLM YAML config files."""
+    """Root configuration model for YAML config files."""
 
     dtype: str
 
@@ -50,14 +46,13 @@ class FlowLMConfig(StrictModel):
     flow: FlowConfig
     transformer: FlowLMTransformerConfig
 
-    # Conditioning
+    # conditioning
     lookup_table: LookupTable
-    weights_path: Union[str, None] = None
+    weights_path: str | None = None
 
 
 # SEANet configuration
 class SEANetConfig(StrictModel):
-    """Configuration for SEANet encoder/decoder."""
     dimension: int
     channels: int
     n_filters: int
@@ -73,7 +68,6 @@ class SEANetConfig(StrictModel):
 
 # Transformer configuration for Mimi
 class MimiTransformerConfig(StrictModel):
-    """Configuration for Mimi transformer."""
     d_model: int
     input_dimension: int
     output_dimensions: tuple[int, ...]
@@ -87,12 +81,11 @@ class MimiTransformerConfig(StrictModel):
 
 # Quantizer configuration
 class QuantizerConfig(StrictModel):
-    """Configuration for quantizer."""
     dimension: int
     output_dimension: int
 
 
-# Root configuration for Mimi
+# Root configuration
 class MimiConfig(StrictModel):
     """Root configuration model for Mimi YAML config files."""
 
@@ -111,30 +104,19 @@ class MimiConfig(StrictModel):
 
     # Quantizer
     quantizer: QuantizerConfig
-    weights_path: Union[str, None] = None
+    weights_path: str | None = None
 
 
-# Root configuration for complete TTS model
 class Config(StrictModel):
-    """Root configuration model for complete TTS YAML config files."""
+    """Top-level configuration for FlowLM + Mimi + shared weights."""
     flow_lm: FlowLMConfig
     mimi: MimiConfig
-    weights_path: Union[str, None] = None
-    weights_path_without_voice_cloning: Union[str, None] = None
+    weights_path: str | None = None
+    weights_path_without_voice_cloning: str | None = None
 
 
-def load_config(yaml_path: Union[str, Path]) -> Config:
-    """Load configuration from YAML file.
-
-    Args:
-        yaml_path: Path to YAML configuration file.
-
-    Returns:
-        Config object with parsed configuration.
-
-    Raises:
-        FileNotFoundError: If config file doesn't exist.
-    """
+def load_config(yaml_path: str | Path) -> Config:
+    """Load YAML configuration into a typed Config object."""
     yaml_path = Path(yaml_path)
 
     if not yaml_path.exists():

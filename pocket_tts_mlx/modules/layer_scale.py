@@ -1,31 +1,14 @@
-"""Layer scale module for MLX.
-
-This module implements layer scale for training stability in deep networks.
-"""
+"""LayerScale module for residual scaling."""
 
 import mlx.core as mx
 import mlx.nn as nn
 
 
 class LayerScale(nn.Module):
-    """Layer scale for gradient flow in deep networks.
-
-    Args:
-        channels: Number of channels (dimension).
-        init: Initial value for the scale parameter.
-    """
-
+    """Learned per-channel scaling for residual branches."""
     def __init__(self, channels: int, init: float):
         super().__init__()
         self.scale = mx.full((channels,), init)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        """Apply layer scale.
-
-        Args:
-            x: Input tensor.
-
-        Returns:
-            Scaled tensor.
-        """
+    def __call__(self, x: mx.array):
         return self.scale * x

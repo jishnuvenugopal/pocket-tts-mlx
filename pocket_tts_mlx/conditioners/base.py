@@ -1,7 +1,4 @@
-"""Base conditioner for MLX.
-
-This module provides the base class for all conditioner modules.
-"""
+"""Base classes for conditioners."""
 
 import logging
 from typing import Generic, NamedTuple, TypeVar
@@ -11,48 +8,32 @@ import mlx.nn as nn
 
 logger = logging.getLogger(__name__)
 
-Prepared = TypeVar("Prepared")  # represents the prepared condition input type
-
 
 class TokenizedText(NamedTuple):
-    """Tokenized text representation.
-
-    Args:
-        tokens: Token IDs tensor (int64).
-    """
+    """Token container for text conditioning."""
     tokens: mx.array
 
 
-class BaseConditioner(nn.Module, Generic[Prepared]):
-    """Base model for all conditioner modules.
+Input = TypeVar("Input")
 
-    Args:
-        dim: Internal dim of the model.
-        output_dim: Output dim of the conditioner.
-        output_bias: If True, the output projection will have a bias.
-        force_linear: Force linear projection even when dim == output_dim.
-    """
 
-    def __init__(
-        self,
-        dim: int,
-        output_dim: int,
-        output_bias: bool = False,
-        force_linear: bool = True,
-    ):
+class BaseConditioner(nn.Module, Generic[Input]):
+    """Base class for conditioners that map inputs to embeddings."""
+    def __init__(self, dim: int, output_dim: int):
         super().__init__()
         self.dim = dim
         self.output_dim = output_dim
-        assert force_linear or dim != output_dim
-        assert not output_bias
 
-    def __call__(self, inputs: TokenizedText) -> mx.array:
-        """Forward pass.
+    def prepare(self, x: Input) -> Input:
+        """Normalize or tokenize inputs before embedding."""
+        return x
 
-        Args:
-            inputs: TokenizedText input.
+    def _get_condition(self, inputs: Input) -> mx.array:
+        """Return raw embeddings for prepared inputs."""
+        raise NotImplementedError
 
-        Returns:
-            Conditioning tensor.
-        """
-        return self._get_condition(inputs)
+    def __call__(self, inputs: Input) -> mx.array:
+        """Compute conditioning embeddings with shape validation."""
+        out = self._get_condition(inputs)
+        assert out.shape[-1] == self.dim
+        return out

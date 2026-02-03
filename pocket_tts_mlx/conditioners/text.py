@@ -1,12 +1,6 @@
-"""Text conditioner for MLX.
-
-This module implements text conditioning using SentencePiece tokenization
-and lookup table embeddings. The implementation mirrors the PyTorch version
-but uses MLX operations.
-"""
+"""Text conditioner for MLX using SentencePiece and LUT embeddings."""
 
 import logging
-from typing import NamedTuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -19,18 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class SentencePieceTokenizer:
-    """SentencePiece tokenizer for natural language.
-
-    For example:
-    ["he didn't, know he's going home.", 'shorter sentence'] =>
-    [[78, 62, 31,  4, 78, 25, 19, 34],
-    [59, 77, PAD, PAD, PAD, PAD, PAD, PAD]]
-
-    Args:
-        n_bins: Number of bins (should equal vocab size).
-        tokenizer_path: Path to SentencePiece tokenizer model.
-    """
-
+    """SentencePiece tokenizer wrapper with cached model download."""
     def __init__(self, n_bins: int, tokenizer_path: str):
         logger.info("Loading SentencePiece tokenizer from %s", tokenizer_path)
         tokenizer_path = download_if_necessary(tokenizer_path)
@@ -41,55 +24,22 @@ class SentencePieceTokenizer:
         )
 
     def __call__(self, text: str) -> TokenizedText:
-        """Tokenize text.
-
-        Args:
-            text: Input text string.
-
-        Returns:
-            TokenizedText with token IDs (with batch dimension).
-        """
+        """Tokenize text into integer ids."""
         tokens = self.sp.encode(text, out_type=int)
-        # SentencePiece returns numpy array, convert to mx.array with batch dimension
         return TokenizedText(mx.array(tokens)[None, :])
 
 
 class LUTConditioner(BaseConditioner):
-    """Lookup table text conditioner.
-
-    Args:
-        n_bins: Number of bins (vocab size).
-        tokenizer_path: Path to tokenizer model.
-        dim: Hidden dim of the conditioner.
-        output_dim: Output dim of the conditioner.
-    """
-
+    """Lookup-table conditioner that maps tokens to embeddings."""
     def __init__(self, n_bins: int, tokenizer_path: str, dim: int, output_dim: int):
         super().__init__(dim=dim, output_dim=output_dim)
         self.tokenizer = SentencePieceTokenizer(n_bins, tokenizer_path)
-        # n_bins + 1 for padding token
         self.embed = nn.Embedding(n_bins + 1, self.dim)
 
     def prepare(self, x: str) -> TokenizedText:
-        """Prepare text input.
-
-        Args:
-            x: Input text string.
-
-        Returns:
-            TokenizedText with tokens.
-        """
-        tokens = self.tokenizer(x)
-        return tokens
+        """Tokenize raw text into TokenizedText."""
+        return self.tokenizer(x)
 
     def _get_condition(self, inputs: TokenizedText) -> mx.array:
-        """Get conditioning from tokens.
-
-        Args:
-            inputs: TokenizedText containing token IDs.
-
-        Returns:
-            Embedding tensor of shape [B, T, D].
-        """
-        embeds = self.embed(inputs.tokens)
-        return embeds
+        """Embed token ids into conditioning vectors."""
+        return self.embed(inputs.tokens)
