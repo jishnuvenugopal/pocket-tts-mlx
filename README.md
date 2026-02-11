@@ -92,3 +92,14 @@ Predefined voices:
 
 - Voice cloning requires Hugging Face access to `kyutai/pocket-tts`.
 - Non-voice-cloning weights are used automatically when voice cloning is unavailable.
+
+**Release Notes**
+
+- Latest: [`v0.2.1`](https://pypi.org/project/pocket-tts-mlx/0.2.1/)
+- Full history: [`CHANGELOG.md`](CHANGELOG.md)
+- Recommended clean-onset preset:
+
+```bash
+pocket-tts-mlx "Hello, world!" --voice marius --output output.wav --warmup-frames 1 --trim-start-ms 40 --fade-in-ms 15
+```
+

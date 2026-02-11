@@ -29,6 +29,7 @@ venv/
 ENV/
 env/
 .venv/
+.venv-publish/
 
 # IDE
 .vscode/
