@@ -23,6 +23,24 @@ def main() -> int:
     parser.add_argument("--output", "-o", default="output.wav", help="Output WAV file")
     parser.add_argument("--max-tokens", type=int, default=500, help="Max tokens per chunk")
     parser.add_argument("--frames-after-eos", type=int, default=7, help="Frames after EOS")
+    parser.add_argument(
+        "--trim-start-ms",
+        type=int,
+        default=0,
+        help="Trim this many milliseconds from start of generated audio",
+    )
+    parser.add_argument(
+        "--fade-in-ms",
+        type=int,
+        default=0,
+        help="Apply linear fade-in over this many milliseconds",
+    )
+    parser.add_argument(
+        "--warmup-frames",
+        type=int,
+        default=1,
+        help="Number of initial Mimi frames to decode and discard for cleaner onset",
+    )
     parser.add_argument("--verbose", "-V", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
@@ -45,6 +63,9 @@ def main() -> int:
             text_to_generate=args.text,
             max_tokens=args.max_tokens,
             frames_after_eos=args.frames_after_eos,
+            trim_start_ms=args.trim_start_ms,
+            fade_in_ms=args.fade_in_ms,
+            warmup_frames=args.warmup_frames,
         )
 
         out_path = Path(args.output)

@@ -56,6 +56,7 @@ class TTSModel(nn.Module):
 
     _TOKENS_PER_SECOND_ESTIMATE = 3.0
     _GEN_SECONDS_PADDING = 2.0
+    _MIMI_WARMUP_FRAMES = 1
 
     def __init__(
         self,
@@ -311,6 +312,9 @@ class TTSModel(nn.Module):
         max_tokens: int = MAX_TOKEN_PER_CHUNK,
         frames_after_eos: Optional[int] = None,
         copy_state: bool = True,
+        trim_start_ms: int = 0,
+        fade_in_ms: int = 0,
+        warmup_frames: int = _MIMI_WARMUP_FRAMES,
     ) -> mx.array:
         """Generate full audio array from text."""
         audio_chunks = []
@@ -320,9 +324,11 @@ class TTSModel(nn.Module):
             frames_after_eos=frames_after_eos,
             copy_state=copy_state,
             max_tokens=max_tokens,
+            warmup_frames=warmup_frames,
         ):
             audio_chunks.append(chunk)
         audio = mx.concatenate(audio_chunks, axis=0)
+        audio = self._postprocess_audio_start(audio, trim_start_ms=trim_start_ms, fade_in_ms=fade_in_ms)
         # Materialize the array so external np.array timing reflects generation cost.
         mx.eval(audio)
         return audio
@@ -334,6 +340,7 @@ class TTSModel(nn.Module):
         max_tokens: int = MAX_TOKEN_PER_CHUNK,
         frames_after_eos: Optional[int] = None,
         copy_state: bool = True,
+        warmup_frames: int = _MIMI_WARMUP_FRAMES,
     ) -> Generator[mx.array, None, None]:
         """Yield audio chunks as they are generated."""
         chunks = split_into_best_sentences(
@@ -350,10 +357,16 @@ class TTSModel(nn.Module):
                 text_to_generate=chunk,
                 frames_after_eos=effective_frames,
                 copy_state=copy_state,
+                warmup_frames=warmup_frames,
             )
 
     def _generate_audio_stream_short_text(
-        self, model_state: Dict, text_to_generate: str, frames_after_eos: int, copy_state: bool
+        self,
+        model_state: Dict,
+        text_to_generate: str,
+        frames_after_eos: int,
+        copy_state: bool,
+        warmup_frames: int,
     ):
         """Generate audio for a short prompt with streaming FlowLM."""
         if copy_state:
@@ -368,6 +381,7 @@ class TTSModel(nn.Module):
 
         mimi_context = self.config.mimi.transformer.context
         mimi_state = init_states(self.mimi, batch_size=1, sequence_length=mimi_context)
+        self._warmup_mimi_decoder(mimi_state, warmup_frames)
 
         t_generating = time.monotonic()
 
@@ -428,6 +442,38 @@ class TTSModel(nn.Module):
         gen_len_sec = token_count / self._TOKENS_PER_SECOND_ESTIMATE + self._GEN_SECONDS_PADDING
         frame_rate = self.config.mimi.frame_rate
         return math.ceil(gen_len_sec * frame_rate)
+
+    def _postprocess_audio_start(self, audio: mx.array, trim_start_ms: int, fade_in_ms: int) -> mx.array:
+        """Optionally trim and fade-in the beginning to suppress first-frame artifacts."""
+        sample_rate = self.sample_rate
+
+        if trim_start_ms > 0:
+            trim_samples = int(sample_rate * trim_start_ms / 1000)
+            if 0 < trim_samples < audio.shape[0]:
+                audio = audio[trim_samples:]
+
+        if fade_in_ms > 0 and audio.shape[0] > 1:
+            fade_samples = int(sample_rate * fade_in_ms / 1000)
+            fade_samples = min(max(0, fade_samples), audio.shape[0])
+            if fade_samples > 1:
+                ramp = mx.linspace(0.0, 1.0, fade_samples).astype(audio.dtype)
+                audio = mx.concatenate([audio[:fade_samples] * ramp, audio[fade_samples:]], axis=0)
+
+        return audio
+
+    def _warmup_mimi_decoder(self, mimi_state: Dict, warmup_frames: int) -> None:
+        """Prime Mimi decoder state and discard startup transients."""
+        if warmup_frames <= 0:
+            return
+
+        zero_latent = mx.zeros((1, 1, self.flow_lm.ldim), dtype=self.flow_lm.dtype)
+        for _ in range(warmup_frames):
+            mimi_decoding_input = zero_latent * self.flow_lm.emb_std + self.flow_lm.emb_mean
+            transposed = mx.transpose(mimi_decoding_input, (0, 2, 1))
+            quantized = self.mimi.quantizer(transposed)
+            audio_frame = self.mimi.decode_from_latent(quantized, mimi_state)
+            mx.eval(audio_frame)
+            increment_steps(self.mimi, mimi_state, increment=16)
 
     @lru_cache(maxsize=2)
     def _cached_get_state_for_audio_prompt(
