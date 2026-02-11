@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pocket-tts-mlx"
-version = "0.2.0"
+version = "0.2.1"
 description = "MLX backend for pocket-tts with Apple Silicon optimization"
 readme = "README.md"
 requires-python = ">=3.10"

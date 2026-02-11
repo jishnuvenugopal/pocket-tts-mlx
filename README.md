@@ -32,14 +32,41 @@ from pocket_tts_mlx import TTSModel
 
 model = TTSModel.load_model()
 state = model.get_state_for_audio_prompt("marius")
-audio = model.generate_audio(state, "Hello from MLX!", max_tokens=200)
+audio = model.generate_audio(
+    state,
+    "Hello from MLX!",
+    max_tokens=200,
+    warmup_frames=1,
+    trim_start_ms=40,
+    fade_in_ms=15,
+)
 ```
 
 **CLI**
 
+Basic usage:
+
 ```bash
 pocket-tts-mlx "Hello, world!" --voice marius --output output.wav
 ```
+
+Cleaner onset (recommended if startup artifacts are audible):
+
+```bash
+pocket-tts-mlx "Hello, world!" --voice marius --output output.wav --warmup-frames 1 --trim-start-ms 40 --fade-in-ms 15
+```
+
+**Onset Cleanup Options**
+
+- `--warmup-frames`: decode and discard initial Mimi frames to reduce decoder startup transients.
+- `--trim-start-ms`: trim milliseconds from start of output.
+- `--fade-in-ms`: apply linear fade-in at start.
+
+Equivalent Python args are `warmup_frames`, `trim_start_ms`, and `fade_in_ms`.
+
+**Performance Note**
+
+`generate_audio()` now materializes generated chunks before returning, so `np.array(audio)` overhead should be near zero in normal usage.
 
 **Voices**
 
