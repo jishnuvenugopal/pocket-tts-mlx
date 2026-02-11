@@ -4,6 +4,13 @@ MLX backend for [pocket-tts](https://github.com/kyutai-labs/pocket-tts) optimize
 
 Runtime is torch-free. Torch is only required for optional parity tests.
 
+**What's New in 0.2.1**
+
+- Cleaner audio onset with `--warmup-frames`, `--trim-start-ms`, and `--fade-in-ms`.
+- Upstream-aligned KV-cache sizing for better memory/runtime behavior.
+- Lower perceived overhead after `generate_audio()` by materializing chunks before return.
+- Release: [PyPI 0.2.1](https://pypi.org/project/pocket-tts-mlx/0.2.1/) · [GitHub v0.2.1](https://github.com/jishnuvenugopal/pocket-tts-mlx/releases/tag/v0.2.1)
+
 **Installation**
 
 PyPI install:
