@@ -2,9 +2,7 @@
 
 import copy
 import logging
-import queue
-import statistics
-import threading
+import math
 import time
 from functools import lru_cache
 from pathlib import Path
@@ -55,6 +53,10 @@ VOICE_CLONING_UNSUPPORTED = (
 
 class TTSModel(nn.Module):
     """Text-to-speech pipeline with conditioning, FlowLM, and Mimi."""
+
+    _TOKENS_PER_SECOND_ESTIMATE = 3.0
+    _GEN_SECONDS_PADDING = 2.0
+
     def __init__(
         self,
         flow_lm: FlowLMModel,
@@ -272,13 +274,6 @@ class TTSModel(nn.Module):
         conditioning = mx.matmul(latents, self.flow_lm.speaker_proj_weight.T)
         return conditioning
 
-    def _slice_kv_cache(self, model_state: Dict, num_frames: int) -> None:
-        """Trim KV cache to a fixed frame count."""
-        for module_state in model_state.values():
-            if "cache" in module_state:
-                cache = module_state["cache"]
-                module_state["cache"] = cache[:, :, :num_frames, :, :]
-
     def _expand_kv_cache(self, model_state: Dict, sequence_length: int) -> None:
         """Expand KV cache capacity for longer sequences."""
         for module_state in model_state.values():
@@ -298,6 +293,17 @@ class TTSModel(nn.Module):
                     )
                     module_state["cache"] = expanded_cache
 
+    def _flow_lm_current_end(self, model_state: Dict) -> int:
+        """Read the current decoded length from FlowLM state."""
+        for module_state in model_state.values():
+            current_end = module_state.get("current_end")
+            if current_end is not None:
+                return int(current_end.shape[0])
+        raise ValueError(
+            "Could not find current_end in model state. Please open an issue at "
+            "https://github.com/jishnuvenugopal/pocket-tts-mlx/issues"
+        )
+
     def generate_audio(
         self,
         model_state: Dict,
@@ -316,7 +322,10 @@ class TTSModel(nn.Module):
             max_tokens=max_tokens,
         ):
             audio_chunks.append(chunk)
-        return mx.concatenate(audio_chunks, axis=0)
+        audio = mx.concatenate(audio_chunks, axis=0)
+        # Materialize the array so external np.array timing reflects generation cost.
+        mx.eval(audio)
+        return audio
 
     def generate_audio_stream(
         self,
@@ -350,13 +359,17 @@ class TTSModel(nn.Module):
         if copy_state:
             model_state = copy.deepcopy(model_state)
 
-        self._expand_kv_cache(model_state, sequence_length=1000)
-        mimi_state = init_states(self.mimi, batch_size=1, sequence_length=1000)
+        prepared = self.flow_lm.conditioner.prepare(text_to_generate)
+        token_count = prepared.tokens.shape[1]
+        max_gen_len = self._estimate_max_gen_len(token_count)
+        current_end = self._flow_lm_current_end(model_state)
+        required_len = current_end + token_count + max_gen_len
+        self._expand_kv_cache(model_state, sequence_length=required_len)
+
+        mimi_context = self.config.mimi.transformer.context
+        mimi_state = init_states(self.mimi, batch_size=1, sequence_length=mimi_context)
 
         t_generating = time.monotonic()
-        gen_len_sec = len(text_to_generate.split()) * 1 + 2.0
-        max_gen_len = int(gen_len_sec * 12.5)
-        prepared = self.flow_lm.conditioner.prepare(text_to_generate)
 
         with display_execution_time("Prompting text"):
             self._run_flow_lm_and_increment_step(
@@ -391,6 +404,8 @@ class TTSModel(nn.Module):
                 audio_frame = self.mimi.decode_from_latent(quantized, mimi_state)
                 increment_steps(self.mimi, mimi_state, increment=16)
                 audio_chunk = audio_frame[0, 0]
+                # Force eager execution per chunk for honest timing and smoother streaming.
+                mx.eval(audio_chunk)
                 total_generated_samples += audio_chunk.shape[-1]
                 yield audio_chunk
 
@@ -407,6 +422,12 @@ class TTSModel(nn.Module):
             generation_time,
             real_time_factor,
         )
+
+    def _estimate_max_gen_len(self, token_count: int) -> int:
+        """Estimate max generation frames from token count."""
+        gen_len_sec = token_count / self._TOKENS_PER_SECOND_ESTIMATE + self._GEN_SECONDS_PADDING
+        frame_rate = self.config.mimi.frame_rate
+        return math.ceil(gen_len_sec * frame_rate)
 
     @lru_cache(maxsize=2)
     def _cached_get_state_for_audio_prompt(
@@ -440,14 +461,14 @@ class TTSModel(nn.Module):
             with display_execution_time("Encoding audio prompt"):
                 prompt = self._encode_audio(mx.array(audio_conditioning)[None, ...])
 
-        model_state = init_states(self.flow_lm, batch_size=1, sequence_length=1000)
+        model_state = init_states(self.flow_lm, batch_size=1, sequence_length=prompt.shape[1])
         with display_execution_time("Prompting audio"):
             self._run_flow_lm_and_increment_step(model_state=model_state, audio_conditioning=prompt)
 
-        # Optional cache slicing for memory; can be re-enabled if needed.
-        # num_audio_frames = prompt.shape[1]
-        # self._slice_kv_cache(model_state, num_audio_frames)
-
+        logger.info(
+            "Size of the model state for audio prompt: %d MB",
+            size_of_dict(model_state) // 1e6,
+        )
         return model_state
 
 
