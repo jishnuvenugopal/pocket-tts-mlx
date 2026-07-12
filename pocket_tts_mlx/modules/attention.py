@@ -75,15 +75,16 @@ def complete_mimi_kv(cache: mx.array, end_offset: mx.array, k: mx.array, v: mx.a
     cache_keys = cache[0]
     cache_values = cache[1]
 
-    # MLX has no scatter; update with small loops over the streaming window.
-    for b in range(B):
-        for t in range(T):
-            idx = int(indexes[b, t])
-            k_update = k[b, :, t, :].reshape(1, H, 1, D)
-            v_update = v[b, :, t, :].reshape(1, H, 1, D)
-            start = mx.array([b, 0, idx, 0])
-            cache_keys = mx.slice_update(cache_keys, k_update, start, axes=[0, 1, 2, 3])
-            cache_values = mx.slice_update(cache_values, v_update, start, axes=[0, 1, 2, 3])
+    if T > capacity:
+        raise ValueError(
+            f"Mimi update length ({T}) cannot exceed cache capacity ({capacity})"
+        )
+
+    # Vectorize the ring-buffer write. The old implementation performed one
+    # scalar device read and two slice updates per batch/frame pair.
+    update_indexes = mx.broadcast_to(indexes[:, None, :, None], (B, H, T, D))
+    cache_keys = mx.put_along_axis(cache_keys, update_indexes, k, axis=2)
+    cache_values = mx.put_along_axis(cache_values, update_indexes, v, axis=2)
 
     keys = cache_keys
     values = cache_values
