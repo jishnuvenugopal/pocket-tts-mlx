@@ -390,8 +390,8 @@ class TTSModel(nn.Module):
         frames_after_eos: int,
         copy_state: bool,
         warmup_frames: int,
-        temperature: float | None,
-        sampling_key: Optional[mx.array],
+        temperature: float | None = None,
+        sampling_key: Optional[mx.array] = None,
     ):
         """Generate audio for a short prompt with streaming FlowLM."""
         if copy_state:
