@@ -226,6 +226,8 @@ class TTSModel(nn.Module):
         text_tokens: Optional[mx.array] = None,
         backbone_input_latents: Optional[mx.array] = None,
         audio_conditioning: Optional[mx.array] = None,
+        temperature: float | None = None,
+        sampling_key: Optional[mx.array] = None,
     ) -> tuple[mx.array, mx.array]:
         """Run FlowLM and advance streaming offsets."""
         if text_tokens is None:
@@ -240,6 +242,8 @@ class TTSModel(nn.Module):
             backbone_input_latents=backbone_input_latents,
             model_state=model_state,
             audio_conditioning=audio_conditioning,
+            temperature=temperature,
+            sampling_key=sampling_key,
         )
         increment_by = (
             text_tokens.shape[1] + backbone_input_latents.shape[1] + audio_conditioning.shape[1]
@@ -253,6 +257,8 @@ class TTSModel(nn.Module):
         text_tokens: mx.array,
         backbone_input_latents: mx.array,
         audio_conditioning: mx.array,
+        temperature: float | None = None,
+        sampling_key: Optional[mx.array] = None,
     ) -> tuple[mx.array, mx.array]:
         """Compute next latent and EOS using FlowLM."""
         text_embeddings = self.flow_lm.conditioner(TokenizedText(text_tokens))
@@ -262,9 +268,10 @@ class TTSModel(nn.Module):
             text_embeddings,
             model_state=model_state,
             lsd_decode_steps=self.lsd_decode_steps,
-            temp=self.temp,
+            temp=self.temp if temperature is None else temperature,
             noise_clamp=self.noise_clamp,
             eos_threshold=self.eos_threshold,
+            sampling_key=sampling_key,
         )
         return output_embeddings[:, None, :], is_eos
 
@@ -315,6 +322,8 @@ class TTSModel(nn.Module):
         trim_start_ms: int = 0,
         fade_in_ms: int = 0,
         warmup_frames: int = _MIMI_WARMUP_FRAMES,
+        temperature: float | None = None,
+        seed: int | None = None,
     ) -> mx.array:
         """Generate full audio array from text."""
         audio_chunks = []
@@ -325,6 +334,8 @@ class TTSModel(nn.Module):
             copy_state=copy_state,
             max_tokens=max_tokens,
             warmup_frames=warmup_frames,
+            temperature=temperature,
+            seed=seed,
         ):
             audio_chunks.append(chunk)
         audio = mx.concatenate(audio_chunks, axis=0)
@@ -341,12 +352,22 @@ class TTSModel(nn.Module):
         frames_after_eos: Optional[int] = None,
         copy_state: bool = True,
         warmup_frames: int = _MIMI_WARMUP_FRAMES,
+        temperature: float | None = None,
+        seed: int | None = None,
     ) -> Generator[mx.array, None, None]:
         """Yield audio chunks as they are generated."""
+        if temperature is not None and temperature < 0:
+            raise ValueError("temperature must be non-negative")
+
+        sampling_key = mx.random.key(seed) if seed is not None else None
         chunks = split_into_best_sentences(
             self.flow_lm.conditioner.tokenizer, text_to_generate, max_tokens
         )
         for chunk in chunks:
+            chunk_key = None
+            if sampling_key is not None:
+                split_keys = mx.random.split(sampling_key, 2)
+                sampling_key, chunk_key = split_keys[0], split_keys[1]
             text_to_generate, frames_after_eos_guess = prepare_text_prompt(chunk)
             frames_after_eos_guess += 2
             effective_frames = (
@@ -358,6 +379,8 @@ class TTSModel(nn.Module):
                 frames_after_eos=effective_frames,
                 copy_state=copy_state,
                 warmup_frames=warmup_frames,
+                temperature=temperature,
+                sampling_key=chunk_key,
             )
 
     def _generate_audio_stream_short_text(
@@ -367,6 +390,8 @@ class TTSModel(nn.Module):
         frames_after_eos: int,
         copy_state: bool,
         warmup_frames: int,
+        temperature: float | None = None,
+        sampling_key: Optional[mx.array] = None,
     ):
         """Generate audio for a short prompt with streaming FlowLM."""
         if copy_state:
@@ -385,9 +410,20 @@ class TTSModel(nn.Module):
 
         t_generating = time.monotonic()
 
+        def next_sampling_key() -> Optional[mx.array]:
+            nonlocal sampling_key
+            if sampling_key is None:
+                return None
+            split_keys = mx.random.split(sampling_key, 2)
+            sampling_key = split_keys[0]
+            return split_keys[1]
+
         with display_execution_time("Prompting text"):
             self._run_flow_lm_and_increment_step(
-                model_state=model_state, text_tokens=prepared.tokens
+                model_state=model_state,
+                text_tokens=prepared.tokens,
+                temperature=temperature,
+                sampling_key=next_sampling_key(),
             )
 
         backbone_input = mx.full(
@@ -402,7 +438,10 @@ class TTSModel(nn.Module):
         for generation_step in range(max_gen_len):
             with display_execution_time("Generating latent", print_output=False) as timer:
                 next_latent, is_eos = self._run_flow_lm_and_increment_step(
-                    model_state=model_state, backbone_input_latents=backbone_input
+                    model_state=model_state,
+                    backbone_input_latents=backbone_input,
+                    temperature=temperature,
+                    sampling_key=next_sampling_key(),
                 )
 
                 is_eos_scalar = bool(is_eos.item())
