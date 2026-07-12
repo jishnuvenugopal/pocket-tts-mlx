@@ -8,10 +8,6 @@
 - Added `UserDictionary` pronunciation overrides with JSON/YAML loading, language-specific and common sections, literal or regex matching, and dictionary composition.
 - Added CLI `--dictionary` support and automatic loading from `~/.config/pocket-tts/dictionary.{yaml,yml,json}`.
 
-### Fixed
-
-- Aligned the CLI `--max-tokens` default with the safer 50-token library default instead of 500.
-
 ### Tests
 
 - Added regression coverage for text normalization, dictionary loading and composition, and generation-path pronunciation overrides.
