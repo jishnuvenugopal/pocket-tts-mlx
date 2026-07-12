@@ -1,45 +1,34 @@
 """Rotary position embedding (RoPE) utilities for MLX."""
 
-import math
-
 import mlx.core as mx
 import mlx.nn as nn
 
 
 def apply_rope(q: mx.array, k: mx.array, offset: int | mx.array = 0, max_period: int | float = 10_000):
-    """Apply RoPE to query and key tensors."""
+    """Apply fused traditional RoPE to query and key tensors."""
     B, T, H, D = q.shape
     Bk, Tk, Hk, Dk = k.shape
     assert (B, T, D) == (Bk, Tk, Dk)
+    assert H == Hk
     assert D % 2 == 0
 
-    # Precompute frequencies for even/odd pairs.
-    ds = mx.arange(D // 2, dtype=mx.float32)
-    freqs = mx.exp(ds * (-math.log(max_period) * 2 / D))
-
-    ts = mx.arange(T, dtype=mx.float32)
-    ts = ts + offset
-    ts = ts.reshape(-1, 1, 1)
-
-    q = q.reshape(B, T, H, D // 2, 2)
-    k = k.reshape(B, T, Hk, D // 2, 2)
-
-    qr = q[..., 0].astype(mx.float32)
-    qi = q[..., 1].astype(mx.float32)
-    kr = k[..., 0].astype(mx.float32)
-    ki = k[..., 1].astype(mx.float32)
-
-    rotr = mx.cos(freqs * ts)
-    roti = mx.sin(freqs * ts)
-    qor = qr * rotr - qi * roti
-    qoi = qr * roti + qi * rotr
-    kor = kr * rotr - ki * roti
-    koi = kr * roti + ki * rotr
-
-    dtype = q.dtype
-    qo = mx.stack([qor.astype(dtype), qoi.astype(dtype)], axis=-1)
-    ko = mx.stack([kor.astype(dtype), koi.astype(dtype)], axis=-1)
-    return qo.reshape(B, T, H, D), ko.reshape(B, T, Hk, D)
+    # mx.fast.rope expects time on the penultimate axis. Stack q/k so one
+    # fused invocation handles both tensors while preserving consecutive-pair
+    # rotation semantics from the original implementation.
+    qk = mx.stack(
+        [mx.transpose(q, (0, 2, 1, 3)), mx.transpose(k, (0, 2, 1, 3))],
+        axis=1,
+    )
+    qk = mx.fast.rope(
+        qk,
+        D,
+        traditional=True,
+        base=float(max_period),
+        scale=1.0,
+        offset=offset,
+    )
+    qo, ko = qk[:, 0], qk[:, 1]
+    return mx.transpose(qo, (0, 2, 1, 3)), mx.transpose(ko, (0, 2, 1, 3))
 
 
 class RotaryEmbedding(nn.Module):

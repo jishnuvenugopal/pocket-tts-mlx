@@ -164,18 +164,13 @@ class StreamingMultiheadAttention(StatefulModule):
         q, k = self._apply_rope(q, k, state)
         k, v = self._complete_kv(k, v, state)
 
-        mask_shape = (query.shape[1], query.shape[1] + state["current_end"].shape[0])
-        attn_mask = materialize_causal_mask(mask_shape)
-
         q = mx.transpose(q, (0, 2, 1, 3))
         k = mx.transpose(k, (0, 2, 1, 3))
         v = mx.transpose(v, (0, 2, 1, 3))
 
-        scale = 1.0 / mx.sqrt(mx.array(d, dtype=mx.float32))
-        scores = mx.matmul(q, mx.transpose(k, (0, 1, 3, 2))) * scale
-        scores = scores + attn_mask[None, None, :, :]
-        weights = mx.softmax(scores, axis=-1)
-        x = mx.matmul(weights, v)
+        x = mx.fast.scaled_dot_product_attention(
+            q, k, v, scale=d**-0.5, mask="causal"
+        )
 
         x = mx.transpose(x, (0, 2, 1, 3))
         x = x.reshape(b, t, self.num_heads * d)
@@ -247,17 +242,9 @@ class MimiStreamingMultiheadAttention(StatefulModule):
         # Build causal mask with fixed context window.
         attn_bias = (pos_k >= 0) & (delta >= 0) & (delta < self.context)
         attn_bias = attn_bias[:, None]
-        attn_mask = mx.where(
-            attn_bias,
-            mx.zeros(attn_bias.shape, dtype=mx.float32),
-            mx.full(attn_bias.shape, -1e9, dtype=mx.float32),
+        x = mx.fast.scaled_dot_product_attention(
+            q, kv.keys, kv.values, scale=d**-0.5, mask=attn_bias
         )
-
-        scale = 1.0 / mx.sqrt(mx.array(d, dtype=mx.float32))
-        scores = mx.matmul(q, mx.transpose(kv.keys, (0, 1, 3, 2))) * scale
-        scores = scores + attn_mask
-        weights = mx.softmax(scores, axis=-1)
-        x = mx.matmul(weights, kv.values)
 
         x = mx.transpose(x, (0, 2, 1, 3))
         x = x.reshape(B, T, self.num_heads * d)
