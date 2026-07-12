@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Improved
+
+- Vectorized Mimi ring-buffer KV-cache writes with `mx.put_along_axis`, removing per-frame Python loops, scalar device reads, and repeated slice updates from the decoder hot path.
+
 ## v0.2.1 - 2026-02-11
 
 ### Added
