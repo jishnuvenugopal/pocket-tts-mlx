@@ -405,12 +405,6 @@ class TTSModel(nn.Module):
                     model_state=model_state, backbone_input_latents=backbone_input
                 )
 
-                is_eos_scalar = bool(is_eos.item())
-                if is_eos_scalar and eos_step is None:
-                    eos_step = generation_step
-                if eos_step is not None and generation_step >= eos_step + frames_after_eos:
-                    break
-
                 # Decode latent frame into audio via Mimi.
                 mimi_decoding_input = next_latent * self.flow_lm.emb_std + self.flow_lm.emb_mean
                 transposed = mx.transpose(mimi_decoding_input, (0, 2, 1))
@@ -418,8 +412,17 @@ class TTSModel(nn.Module):
                 audio_frame = self.mimi.decode_from_latent(quantized, mimi_state)
                 increment_steps(self.mimi, mimi_state, increment=16)
                 audio_chunk = audio_frame[0, 0]
-                # Force eager execution per chunk for honest timing and smoother streaming.
-                mx.eval(audio_chunk)
+
+                # Materialize FlowLM EOS and Mimi audio together. Calling
+                # is_eos.item() before building the decoder graph forced two
+                # GPU synchronizations for every yielded frame.
+                mx.eval(is_eos, audio_chunk)
+                is_eos_scalar = bool(is_eos.item())
+                if is_eos_scalar and eos_step is None:
+                    eos_step = generation_step
+                if eos_step is not None and generation_step >= eos_step + frames_after_eos:
+                    break
+
                 total_generated_samples += audio_chunk.shape[-1]
                 yield audio_chunk
 
