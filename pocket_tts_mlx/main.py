@@ -9,6 +9,7 @@ import numpy as np
 import soundfile as sf
 
 from pocket_tts_mlx import TTSModel
+from pocket_tts_mlx.default_parameters import MAX_TOKEN_PER_CHUNK
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,9 @@ def main() -> int:
     parser.add_argument("text", help="Text to convert to speech")
     parser.add_argument("--voice", "-v", default="marius", help="Voice name (default: marius)")
     parser.add_argument("--output", "-o", default="output.wav", help="Output WAV file")
-    parser.add_argument("--max-tokens", type=int, default=500, help="Max tokens per chunk")
+    parser.add_argument(
+        "--max-tokens", type=int, default=MAX_TOKEN_PER_CHUNK, help="Max tokens per chunk"
+    )
     parser.add_argument("--frames-after-eos", type=int, default=7, help="Frames after EOS")
     parser.add_argument(
         "--trim-start-ms",

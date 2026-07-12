@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Split oversized single sentences at commas, semicolons, and colons before generation, keeping each natural clause group within `max_tokens` when possible. Previously, a sentence without terminal punctuation before the end could bypass the chunk limit and produce skipped words, garbled speech, or an excessively long audio tail.
+- Warn when a chunk still exceeds `max_tokens` because it contains no usable sentence or clause boundary.
+- Aligned the CLI `--max-tokens` default with the safer 50-token library default instead of 500.
+
+### Tests
+
+- Added regression coverage for oversized clause splitting and for preserving short sentences containing commas.
+
 ## v0.2.1 - 2026-02-11
 
 ### Added
