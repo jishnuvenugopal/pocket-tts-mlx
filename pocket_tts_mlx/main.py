@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -9,8 +10,37 @@ import numpy as np
 import soundfile as sf
 
 from pocket_tts_mlx import TTSModel
+from pocket_tts_mlx.text_normalization import UserDictionary
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DICTIONARY_DIR = Path(
+    os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+) / "pocket-tts"
+DEFAULT_DICTIONARY_CANDIDATES = (
+    DEFAULT_DICTIONARY_DIR / "dictionary.yaml",
+    DEFAULT_DICTIONARY_DIR / "dictionary.yml",
+    DEFAULT_DICTIONARY_DIR / "dictionary.json",
+)
+
+
+def _resolve_dictionary(explicit_path: str | None) -> UserDictionary | None:
+    """Load an explicit dictionary or the first dictionary in the default config path."""
+    if explicit_path == "":
+        return None
+    if explicit_path is not None:
+        path = Path(explicit_path).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(f"Dictionary file not found: {path}")
+        return UserDictionary.from_file(path)
+
+    for candidate in DEFAULT_DICTIONARY_CANDIDATES:
+        if candidate.exists():
+            dictionary = UserDictionary.from_file(candidate)
+            entry_count = sum(len(items) for items in dictionary.entries.values())
+            logger.info("Loaded dictionary from %s (%d entries)", candidate, entry_count)
+            return dictionary
+    return None
 
 
 def main() -> int:
@@ -41,6 +71,14 @@ def main() -> int:
         default=1,
         help="Number of initial Mimi frames to decode and discard for cleaner onset",
     )
+    parser.add_argument(
+        "--dictionary",
+        default=None,
+        help=(
+            "Pronunciation dictionary (.yaml/.yml/.json). If omitted, load "
+            "~/.config/pocket-tts/dictionary.* when present; pass an empty string to disable."
+        ),
+    )
     parser.add_argument("--verbose", "-V", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
@@ -56,6 +94,7 @@ def main() -> int:
 
         logger.info("Loading voice: %s", args.voice)
         model_state = model.get_state_for_audio_prompt(args.voice)
+        dictionary = _resolve_dictionary(args.dictionary)
 
         logger.info("Generating audio...")
         audio = model.generate_audio(
@@ -66,6 +105,7 @@ def main() -> int:
             trim_start_ms=args.trim_start_ms,
             fade_in_ms=args.fade_in_ms,
             warmup_frames=args.warmup_frames,
+            dictionary=dictionary,
         )
 
         out_path = Path(args.output)

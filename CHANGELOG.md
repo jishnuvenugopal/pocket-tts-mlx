@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Ported upstream text normalization for decimals and currency so structural punctuation is converted to spoken text before tokenization.
+- Added `UserDictionary` pronunciation overrides with JSON/YAML loading, language-specific and common sections, literal or regex matching, and dictionary composition.
+- Added CLI `--dictionary` support and automatic loading from `~/.config/pocket-tts/dictionary.{yaml,yml,json}`.
+
+### Tests
+
+- Added regression coverage for text normalization, dictionary loading and composition, and generation-path pronunciation overrides.
+
 ## v0.2.1 - 2026-02-11
 
 ### Added
