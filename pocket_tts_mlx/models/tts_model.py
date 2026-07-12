@@ -28,6 +28,7 @@ from pocket_tts_mlx.modules.dummy_quantizer import DummyQuantizer
 from pocket_tts_mlx.modules.mimi_transformer import ProjectedTransformer
 from pocket_tts_mlx.modules.seanet import SEANetDecoder, SEANetEncoder
 from pocket_tts_mlx.modules.stateful_module import increment_steps, init_states
+from pocket_tts_mlx.text_normalization import UserDictionary, normalize_text
 from pocket_tts_mlx.utils.config import Config, load_config
 from pocket_tts_mlx.utils.utils import display_execution_time, download_if_necessary, size_of_dict
 from pocket_tts_mlx.utils.weight_conversion import (
@@ -315,6 +316,8 @@ class TTSModel(nn.Module):
         trim_start_ms: int = 0,
         fade_in_ms: int = 0,
         warmup_frames: int = _MIMI_WARMUP_FRAMES,
+        dictionary: UserDictionary | None = None,
+        language: str = "english",
     ) -> mx.array:
         """Generate full audio array from text."""
         audio_chunks = []
@@ -325,6 +328,8 @@ class TTSModel(nn.Module):
             copy_state=copy_state,
             max_tokens=max_tokens,
             warmup_frames=warmup_frames,
+            dictionary=dictionary,
+            language=language,
         ):
             audio_chunks.append(chunk)
         audio = mx.concatenate(audio_chunks, axis=0)
@@ -341,10 +346,16 @@ class TTSModel(nn.Module):
         frames_after_eos: Optional[int] = None,
         copy_state: bool = True,
         warmup_frames: int = _MIMI_WARMUP_FRAMES,
+        dictionary: UserDictionary | None = None,
+        language: str = "english",
     ) -> Generator[mx.array, None, None]:
         """Yield audio chunks as they are generated."""
         chunks = split_into_best_sentences(
-            self.flow_lm.conditioner.tokenizer, text_to_generate, max_tokens
+            self.flow_lm.conditioner.tokenizer,
+            text_to_generate,
+            max_tokens,
+            dictionary=dictionary,
+            language=language,
         )
         for chunk in chunks:
             text_to_generate, frames_after_eos_guess = prepare_text_prompt(chunk)
@@ -518,8 +529,17 @@ class TTSModel(nn.Module):
         return model_state
 
 
-def split_into_best_sentences(tokenizer, text_to_generate: str, max_tokens: int) -> list[str]:
+def split_into_best_sentences(
+    tokenizer,
+    text_to_generate: str,
+    max_tokens: int,
+    dictionary: UserDictionary | None = None,
+    language: str = "english",
+) -> list[str]:
     text_to_generate, _ = prepare_text_prompt(text_to_generate)
+    text_to_generate = normalize_text(
+        text_to_generate, language=language, dictionary=dictionary
+    )
     text_to_generate = text_to_generate.strip()
     tokens = tokenizer(text_to_generate)
     list_of_tokens = tokens.tokens[0].tolist()

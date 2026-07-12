@@ -49,6 +49,25 @@ audio = model.generate_audio(
 )
 ```
 
+Pronunciation overrides can be supplied programmatically:
+
+```python
+from pocket_tts_mlx import TTSModel, UserDictionary
+
+dictionary = UserDictionary.from_dict({
+    "english": [
+        {"match": "MLX", "replace": "em el ex"},
+        {"match": "Xarismata", "replace": "zah riss mah tah"},
+    ]
+})
+
+audio = model.generate_audio(
+    state,
+    "MLX is used by Xarismata.",
+    dictionary=dictionary,
+)
+```
+
 **CLI**
 
 Basic usage:
@@ -56,6 +75,29 @@ Basic usage:
 ```bash
 pocket-tts-mlx "Hello, world!" --voice marius --output output.wav
 ```
+
+Use a pronunciation dictionary:
+
+```bash
+pocket-tts-mlx "MLX is fast." --dictionary ~/.config/pocket-tts/dictionary.yaml
+```
+
+Dictionary files may contain language-specific and shared entries:
+
+```yaml
+english:
+  - match: MLX
+    replace: em el ex
+  - match: Xarismata
+    replace: zah riss mah tah
+common:
+  - match: "&"
+    replace: " and "
+```
+
+When `--dictionary` is omitted, the CLI checks
+`~/.config/pocket-tts/dictionary.{yaml,yml,json}` automatically. Pass
+`--dictionary ""` to disable automatic loading.
 
 Cleaner onset (recommended if startup artifacts are audible):
 
@@ -109,4 +151,3 @@ Predefined voices:
 ```bash
 pocket-tts-mlx "Hello, world!" --voice marius --output output.wav --warmup-frames 1 --trim-start-ms 40 --fade-in-ms 15
 ```
-
