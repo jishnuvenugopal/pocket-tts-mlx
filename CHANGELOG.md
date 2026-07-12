@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Improved
+
+- Replaced manual attention matmul/softmax sequences with `mx.fast.scaled_dot_product_attention` for FlowLM and Mimi.
+- Replaced manual trigonometric RoPE construction with a fused `mx.fast.rope` call shared by query and key tensors.
+
 ## v0.2.1 - 2026-02-11
 
 ### Added
