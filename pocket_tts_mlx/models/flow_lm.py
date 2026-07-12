@@ -88,6 +88,7 @@ class FlowLMModel(nn.Module):
         temp: float,
         noise_clamp: Optional[float],
         eos_threshold: float,
+        sampling_key: Optional[mx.array] = None,
     ) -> Tuple[mx.array, mx.array]:
         """Sample next latent and end-of-sequence flag."""
         sequence = mx.where(mx.isnan(sequence), self.bos_emb, sequence)
@@ -103,9 +104,9 @@ class FlowLMModel(nn.Module):
         noise_shape = list(transformer_out.shape[:-1]) + [self.ldim]
         std = temp**0.5
         if noise_clamp is None:
-            noise = mx.random.normal(noise_shape) * std
+            noise = mx.random.normal(noise_shape, key=sampling_key) * std
         else:
-            noise = mx.random.normal(noise_shape) * std
+            noise = mx.random.normal(noise_shape, key=sampling_key) * std
             noise = mx.clip(noise, -noise_clamp, noise_clamp)
 
         # Condition flow MLP on transformer output.
@@ -130,6 +131,7 @@ class FlowLMModel(nn.Module):
         temp: float,
         noise_clamp: Optional[float],
         eos_threshold: float,
+        sampling_key: Optional[mx.array] = None,
     ) -> Tuple[mx.array, mx.array]:
         return self(
             sequence=sequence,
@@ -139,4 +141,5 @@ class FlowLMModel(nn.Module):
             noise_clamp=noise_clamp,
             eos_threshold=eos_threshold,
             model_state=model_state,
+            sampling_key=sampling_key,
         )

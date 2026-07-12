@@ -57,6 +57,15 @@ Basic usage:
 pocket-tts-mlx "Hello, world!" --voice marius --output output.wav
 ```
 
+Reproducible generation with lower sampling variance:
+
+```bash
+pocket-tts-mlx "Hello, world!" --temperature 0.5 --seed 42
+```
+
+Equivalent Python arguments are `temperature` and `seed` on
+`generate_audio()` and `generate_audio_stream()`.
+
 Cleaner onset (recommended if startup artifacts are audible):
 
 ```bash
@@ -109,4 +118,3 @@ Predefined voices:
 ```bash
 pocket-tts-mlx "Hello, world!" --voice marius --output output.wav --warmup-frames 1 --trim-start-ms 40 --fade-in-ms 15
 ```
-

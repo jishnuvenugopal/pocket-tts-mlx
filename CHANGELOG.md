@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added per-generation `temperature` and deterministic `seed` controls to the Python API and CLI.
+- Use explicit per-generation MLX random keys so seeded requests are reproducible without mutating global RNG state.
+
 ## v0.2.1 - 2026-02-11
 
 ### Added

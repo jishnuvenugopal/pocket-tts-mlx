@@ -9,6 +9,7 @@ import numpy as np
 import soundfile as sf
 
 from pocket_tts_mlx import TTSModel
+from pocket_tts_mlx.default_parameters import DEFAULT_TEMPERATURE
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,13 @@ def main() -> int:
     parser.add_argument("--output", "-o", default="output.wav", help="Output WAV file")
     parser.add_argument("--max-tokens", type=int, default=500, help="Max tokens per chunk")
     parser.add_argument("--frames-after-eos", type=int, default=7, help="Frames after EOS")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=DEFAULT_TEMPERATURE,
+        help="Sampling temperature (lower is more consistent)",
+    )
+    parser.add_argument("--seed", type=int, default=None, help="Deterministic generation seed")
     parser.add_argument(
         "--trim-start-ms",
         type=int,
@@ -52,7 +60,7 @@ def main() -> int:
 
     try:
         logger.info("Loading MLX model...")
-        model = TTSModel.load_model()
+        model = TTSModel.load_model(temp=args.temperature)
 
         logger.info("Loading voice: %s", args.voice)
         model_state = model.get_state_for_audio_prompt(args.voice)
@@ -66,6 +74,8 @@ def main() -> int:
             trim_start_ms=args.trim_start_ms,
             fade_in_ms=args.fade_in_ms,
             warmup_frames=args.warmup_frames,
+            temperature=args.temperature,
+            seed=args.seed,
         )
 
         out_path = Path(args.output)
