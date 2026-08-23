@@ -271,7 +271,7 @@ class TTSModel(nn.Module):
     def _encode_audio(self, audio: mx.array) -> mx.array:
         """Encode conditioning audio into FlowLM-compatible embeddings."""
         encoded = self.mimi.encode_to_latent(audio)
-        latents = mx.transpose(encoded, (-1, -2)).astype(mx.float32)
+        latents = mx.swapaxes(encoded, -1, -2).astype(mx.float32)
         conditioning = mx.matmul(latents, self.flow_lm.speaker_proj_weight.T)
         return conditioning
 
